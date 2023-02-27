@@ -18,6 +18,7 @@ from api.views.update import router as update_router
 from api.views.users import router as user_router
 from api.views.wallets import router as wallet_router
 from api.views.websocket import router as websocket_router
+from api.views.vouchers import router as voucher_router
 
 router = APIRouter()
 
@@ -36,6 +37,7 @@ router.include_router(template_router, prefix="/templates")
 router.include_router(product_router, prefix="/products")
 router.include_router(invoice_router, prefix="/invoices")
 router.include_router(payout_router, prefix="/payouts")
+router.include_router(voucher_router, prefix="/vouchers")
 
 
 # Authorization
