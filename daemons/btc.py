@@ -44,7 +44,6 @@ class BTCDaemon(BaseDaemon):
         "verified": "verified_tx",
     }
     ALIASES = {"getrequest": "get_request"}
-    QUOTES_KEY = "_quotes"  # where exchange rates are stored
     # override if your daemon has different networks than default electrum provides
     NETWORK_MAPPING: dict = {}
 
@@ -62,7 +61,6 @@ class BTCDaemon(BaseDaemon):
         self.load_electrum()
         super().__init__()
         self.latest_height = -1  # to avoid duplicate block notifications
-        self._fetched_fx = False
         # activate network and configure logging
         activate_selected_network = self.NETWORK_MAPPING.get(self.NET.lower())
         if not activate_selected_network:
@@ -378,6 +376,14 @@ class BTCDaemon(BaseDaemon):
     def get_tx_hashes_for_invoice(self, wallet, invoice):
         return wallet._is_onchain_invoice_paid(invoice)[2]
 
+    def is_paid_via_lightning(self, wallet, invoice):
+        return (
+            self.LIGHTNING_SUPPORTED
+            and invoice.is_lightning()
+            and wallet.lnworker
+            and wallet.lnworker.get_invoice_status(invoice) == self.electrum.invoices.PR_PAID
+        )
+
     def process_events(self, event, *args):
         """Override in your subclass if needed"""
         wallet = None
@@ -392,13 +398,19 @@ class BTCDaemon(BaseDaemon):
         elif event == "new_payment":
             wallet, address, status = args
             request = self._get_request(wallet, address)
-            tx_hashes = self.get_tx_hashes_for_invoice(wallet, request)
+            paid_via_lightning = self.is_paid_via_lightning(wallet, request)
+            tx_hashes = self.get_tx_hashes_for_invoice(wallet, request) if not paid_via_lightning else [request.rhash]
+            sent_amount = (
+                self.get_sent_amount(wallet, self._get_request_address(request), tx_hashes)
+                if not paid_via_lightning
+                else format_satoshis(request.get_amount_sat())
+            )
             data = {
                 "address": str(address),
                 "status": status,
                 "status_str": self.get_status_str(status),
                 "tx_hashes": tx_hashes,
-                "sent_amount": self.get_sent_amount(wallet, self._get_request_address(request), tx_hashes),
+                "sent_amount": sent_amount,
             }
         elif event == "verified_tx":
             data, wallet = self.process_verified_tx(args)
@@ -415,8 +427,17 @@ class BTCDaemon(BaseDaemon):
     @rpc(requires_wallet=True)
     async def get_request(self, *args, **kwargs):
         wallet = kwargs.pop("wallet", None)
-        result = await self.wallets[wallet]["cmd"].get_request(*args, **kwargs, wallet=self.wallets[wallet]["wallet"])
-        result["sent_amount"] = self.get_sent_amount(self.wallets[wallet]["wallet"], result["address"], result["tx_hashes"])
+        wallet_obj = self.wallets[wallet]["wallet"]
+        request = self._get_request(wallet_obj, *args, **kwargs)
+        result = wallet_obj.export_request(request)
+        paid_via_lightning = self.is_paid_via_lightning(wallet_obj, request)
+        if paid_via_lightning:
+            result["tx_hashes"] = [request.rhash]
+        result["sent_amount"] = (
+            self.get_sent_amount(wallet_obj, result["address"], result["tx_hashes"])
+            if not paid_via_lightning
+            else format_satoshis(request.get_amount_sat())
+        )
         return result
 
     @rpc
@@ -485,15 +506,13 @@ class BTCDaemon(BaseDaemon):
     def exchange_rate(self, currency=None, wallet=None) -> str:
         if currency is None:
             currency = self.DEFAULT_CURRENCY
-        # For performance, disable this on coingecko because it provides all rates at once
-        if not self._fetched_fx or (self.EXCHANGE.lower() != "coingecko" and self.fx.get_currency() != currency):
+        if self.fx.get_currency() != currency:
             self.fx.set_currency(currency)
-            self._fetched_fx = True
-        return str(self.fx.exchange.get_cached_spot_quote(currency))
+        return str(self.fx.exchange_rate())
 
     @rpc
     def list_currencies(self, wallet=None) -> list:
-        return list(getattr(self.fx.exchange, self.QUOTES_KEY).keys())
+        return self.fx.get_currencies(False)
 
     @rpc
     def get_tx_size(self, raw_tx: dict, wallet=None) -> int:
@@ -634,6 +653,14 @@ class BTCDaemon(BaseDaemon):
             return command_parser.format_help()
         else:
             raise Exception("Procedure not found")
+
+    @rpc(requires_wallet=True, requires_network=True)
+    async def close_wallet(self, wallet):
+        method = self.wallets[wallet]["cmd"].close_wallet
+        await method() if self.ASYNC_CLIENT else method()
+        del self.wallets_updates[wallet]
+        del self.wallets[wallet]
+        return True
 
 
 if __name__ == "__main__":

@@ -315,12 +315,14 @@ class Wallet:
                 await daemon_ctx.get().process_transaction(tx)
 
     async def start(self, blocks):
+        first_start = self.latest_height == -1
         await self._start_init_vars()
 
         self.running = True
         # process onchain transactions
         current_height = await self.coin.get_block_number()
-        await self._start_process_pending(blocks, current_height)
+        if not first_start:
+            await self._start_process_pending(blocks, current_height)
 
         self.latest_height = current_height
         for req in self.get_sorted_requests():
@@ -623,7 +625,15 @@ class BlockProcessorDaemon(BaseDaemon, metaclass=ABCMeta):
             wallet_contract = self.wallets[wallet].contract.address if self.wallets[wallet].contract else None
             if tx.contract != wallet_contract:
                 continue
-            await self.trigger_event({"event": "new_transaction", "tx": tx.hash}, wallet)
+            await self.trigger_event(
+                {
+                    "event": "new_transaction",
+                    "tx": tx.hash,
+                    "amount": decimal_to_string(amount, tx.divisibility),
+                    "contract": tx.contract,
+                },
+                wallet,
+            )
             if tx.from_addr in self.wallets[wallet].request_addresses:
                 self.loop.create_task(self.wallets[wallet].process_new_payment(tx.from_addr, tx, amount, wallet))
 
