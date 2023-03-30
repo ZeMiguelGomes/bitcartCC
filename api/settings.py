@@ -72,6 +72,8 @@ class Settings(BaseSettings):
     plugins: list = None
     plugins_schema: dict = {}
 
+    alchemy_api_key: str = Field(None, env="ALCHEMY_API_KEY")
+
     class Config:
         env_file = "conf/.env"
 

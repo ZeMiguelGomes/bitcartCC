@@ -66,7 +66,7 @@ class LogRecordSocketReceiver(socketserver.ThreadingTCPServer):
             abort = self.abort
 
 
-def wait_for_port(host="localhost", port=LOGSERVER_PORT, timeout=5.0):
+def wait_for_port(host="localhost", port=LOGSERVER_PORT, timeout=10.0):
     start_time = time.perf_counter()
     while True:
         try:

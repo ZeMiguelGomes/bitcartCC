@@ -207,6 +207,9 @@ class User(BaseModel):
     fido2_devices = Column(ARRAY(JSON))
     settings = Column(JSON)
 
+    def __str__(self):
+        return f"User ID: {self.id}\n\n"
+
     async def add_fields(self):
         await super().add_fields()
         if not self.totp_key:  # pragma: no cover # TODO: remove a few releases later
@@ -516,6 +519,29 @@ class PaymentMethod(BaseModel):
     hint = Column(Text)
     created = Column(DateTime(True), nullable=False)
 
+    def __str__(self):
+        return f"PaymentMethod:\n"\
+               f"id: {self.id}\n"\
+               f"amount: {self.amount}\n"\
+               f"currency: {self.currency}\n"\
+               f"created: {self.created}\n"\
+               f"rate: {self.rate}\n"\
+               f"discount: {self.discount}\n"\
+               f"confirmations: {self.confirmations}\n"\
+               f"recommended_fee: {self.recommended_fee}\n"\
+               f"symbol: {self.symbol}\n"\
+               f"payment_address: {self.payment_address}\n"\
+               f"payment_url: {self.payment_url}\n"\
+               f"rhash: {self.rhash}\n"\
+               f"lookup_field: {self.lookup_field}\n"\
+               f"lightning: {self.lightning}\n"\
+               f"contract: {self.contract}\n"\
+               f"divisibility: {self.divisibility}\n"\
+               f"user_address: {self.user_address}\n"\
+               f"node_id: {self.node_id}\n"\
+               f"label: {self.label}\n"\
+               f"hint: {self.hint}\n"
+
     async def to_dict(self, index: int = None):
         from api import utils
 
@@ -589,6 +615,31 @@ class Invoice(BaseModel):
     user_id = Column(Text, ForeignKey(User.id, ondelete="SET NULL"))
     creation_time = Column(Numeric(36, 18))
     created = Column(DateTime(True), nullable=False)
+
+    def __str__(self):
+        return (
+            f"id: {self.id}\n"
+            f"price: {self.price}\n"
+            f"sent_amount: {self.sent_amount}\n"
+            f"exception_status: {self.exception_status}\n"
+            f"currency: {self.currency}\n"
+            f"paid_currency: {self.paid_currency}\n"
+            f"status: {self.status}\n"
+            f"expiration: {self.expiration}\n"
+            f"buyer_email: {self.buyer_email}\n"
+            f"discount: {self.discount}\n"
+            f"promocode: {self.promocode}\n"
+            f"shipping_address: {self.shipping_address}\n"
+            f"notes: {self.notes}\n"
+            f"notification_url: {self.notification_url}\n"
+            f"redirect_url: {self.redirect_url}\n"
+            f"store_id: {self.store_id}\n"
+            f"tx_hashes: {self.tx_hashes}\n"
+            f"order_id: {self.order_id}\n"
+            f"user_id: {self.user_id}\n"
+            f"creation_time: {self.creation_time}\n"
+            f"created: {self.created}\n"
+        )
 
     async def add_related(self):
         from api import crud

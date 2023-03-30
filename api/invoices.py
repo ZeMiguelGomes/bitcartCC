@@ -264,23 +264,33 @@ async def update_stock_levels(invoice):
 
 
 async def update_status(invoice, status, method=None, tx_hashes=[], sent_amount=Decimal(0)):
-    if status == InvoiceStatus.PENDING and invoice.status == InvoiceStatus.PENDING and method and sent_amount > 0:
-        full_method_name = method.get_name()
-        if not invoice.paid_currency or invoice.paid_currency == full_method_name:
-            await invoice.update(
-                paid_currency=full_method_name,
-                discount=method.discount,
-                tx_hashes=tx_hashes,
-                sent_amount=sent_amount,
-                exception_status=InvoiceExceptionStatus.PAID_PARTIAL,
-            ).apply()
-            await process_notifications(invoice)
+
+    # Check if the sent  amount is superior to the invoice amount of that currency
+    if method and not invoice.sent_amount >= method.amount:
+        # The method exists and the invoice is not fully paid
+
+        if status == InvoiceStatus.PENDING and invoice.status == InvoiceStatus.PENDING and method and sent_amount > 0:
+            full_method_name = method.get_name()
+            if not invoice.paid_currency or invoice.paid_currency == full_method_name:
+                #Paid partially
+                await invoice.update(
+                    paid_currency=full_method_name,
+                    discount=method.discount,
+                    tx_hashes=tx_hashes,
+                    sent_amount=sent_amount,
+                    exception_status=InvoiceExceptionStatus.PAID_PARTIAL,
+                ).apply()
+                await process_notifications(invoice)
 
     if (
         invoice.status != status
         and status != InvoiceStatus.PENDING
         and (invoice.status != InvoiceStatus.COMPLETE or status == InvoiceStatus.REFUNDED)
-    ):
+    ) or (method and invoice.sent_amount >= method.amount):
+        # The invoice can be expired or paid
+        if status == InvoiceStatus.PENDING:
+            status = InvoiceStatus.COMPLETE
+        
         log_text = f"Updating status of invoice {invoice.id}"
         if method:
             full_method_name = method.get_name()

@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Union
 import paramiko
 from fastapi.exceptions import HTTPException
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import EmailStr, root_validator, validator
+from pydantic import EmailStr, root_validator, validator, UUID4
 from pydantic.utils import GetterDict as PydanticGetterDict
 
 from api.constants import BACKUP_FREQUENCIES, BACKUP_PROVIDERS, FEE_ETA_TARGETS, MAX_CONFIRMATION_WATCH
@@ -453,6 +453,10 @@ class CustomerUpdateData(BaseModel):
     buyer_email: Optional[EmailStr] = ""
     shipping_address: Optional[str] = ""
     notes: Optional[str] = ""
+    sent_amount: Optional[str] = ""
+    paid_currency: Optional[str] = ""
+    tx_hashes: Optional[str] = ""
+    paymentID: Optional[str] = ""
 
     @validator("buyer_email", pre=True, always=False)
     def validate_buyer_email(cls, val):
@@ -762,3 +766,16 @@ class Refund(CreateRefund):
     wallet_currency: Optional[str]
     payout_status: Optional[str]
     tx_hash: Optional[str]
+
+class SubmitVoucher(BaseModel):
+    chainID: int
+    voucherID: str
+    invoiceID: Optional[str] = None
+    id: str
+
+
+    @validator('chainID')
+    def chainID_limits(cls, v):
+        if v < 1 or v > 999999:
+            raise ValueError('chainID must be between 1 and 999999')
+        return v

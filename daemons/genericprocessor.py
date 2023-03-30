@@ -474,6 +474,8 @@ class Wallet:
 
     async def process_new_payment(self, from_address, tx, amount, wallet):
         req = self.get_request(from_address)
+
+        # Caso vá pela 2ª abordagem, quando se faz um get_request tenho de antes verificar se a invoice já tem algum sent_amount! 
         if req is None or req.status != PR_UNPAID:
             return
         req.sent_amount += amount
@@ -619,8 +621,17 @@ class BlockProcessorDaemon(BaseDaemon, metaclass=ABCMeta):
             tx.divisibility = self.DIVISIBILITY
         to = tx.to
         amount = from_wei(tx.value, tx.divisibility)
+
+        # ⚠️ Test purposes
+        '''if to == "0xE426adF329578C9d20d1C393E6e509f6174b6EE9" or tx.from_addr == "0xE426adF329578C9d20d1C393E6e509f6174b6EE9":
+            print("CATH TRANSACTION ")
+            print(tx)
+        '''
+        # self.addresses are the user's wallet addressses
         if to not in self.addresses:
             return
+
+        # self.wallets are all the wallets of that contract
         for wallet in self.addresses[to]:
             wallet_contract = self.wallets[wallet].contract.address if self.wallets[wallet].contract else None
             if tx.contract != wallet_contract:
@@ -634,6 +645,7 @@ class BlockProcessorDaemon(BaseDaemon, metaclass=ABCMeta):
                 },
                 wallet,
             )
+            # self.wallets[wallet].request_addresses is the address that the money came from 
             if tx.from_addr in self.wallets[wallet].request_addresses:
                 self.loop.create_task(self.wallets[wallet].process_new_payment(tx.from_addr, tx, amount, wallet))
 

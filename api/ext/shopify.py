@@ -47,6 +47,16 @@ class ShopifyClient:
                 ),
             )
         ).get("order", {})
+    
+    async def get_full_order(self, order_id):
+        return (
+            await self.request(
+                "GET",
+                (
+                    f"orders/{order_id}.json"
+                ),
+            )
+        ).get("order", {})
 
     async def order_exists(self, order_id):
         data = await self.request("GET", f"orders/{order_id}.json?fields=id")

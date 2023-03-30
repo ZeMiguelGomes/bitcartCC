@@ -7,6 +7,14 @@ from web3 import Web3
 from web3.middleware import geth_poa_middleware
 from fastapi import HTTPException
 from pydantic import BaseModel
+from typing import Any, Dict
+from api import models, utils, settings
+from api.ext.moneyformat import currency_table
+import re
+from sqlalchemy import select
+from decimal import Decimal
+from api.ext import shopify as shopify_ext
+
 
 
 logger = get_logger(__name__)
@@ -48,6 +56,35 @@ class TransferRequest(BaseModel):
     token_id: int
     chain_id: str
 
+class ProductBasedDiscountValue():
+    FREE = "Free"
+    PERCENTUAL = "%"
+    CURRENCY = "€$£"
+
+class DiscountTypes:
+    FIXED = "Fixed"
+    ABSOLUTE = "Absolute"
+    PRODUCT_BASED = "Product-based"
+
+
+    async def get_discount_type(nft_metadata: dict) -> str:
+        discount_type_map = {
+            "Fixed": DiscountTypes.FIXED,
+            "Absolute": DiscountTypes.ABSOLUTE,
+            "Product-based": DiscountTypes.PRODUCT_BASED
+        }
+
+        trait_type = next((attribute['value'] for attribute in nft_metadata['metadata']['attributes'] if attribute['trait_type'] == 'Discount Type'), None)
+
+        discount_type = discount_type_map.get(trait_type)
+
+        if discount_type == DiscountTypes.FIXED:
+            return DiscountTypes.FIXED
+        elif discount_type == DiscountTypes.ABSOLUTE:
+            return DiscountTypes.ABSOLUTE
+        elif discount_type == DiscountTypes.PRODUCT_BASED:
+            return DiscountTypes.PRODUCT_BASED
+        return None
 
 class AlchemyProvider:
     ABI = VOUCHER_ABI
@@ -152,9 +189,10 @@ class AlchemyProvider:
         # Raw list of the NFT
         nft = await self.getNFTByUser(userAddress, chainID)
         line_items = json.loads(lineItems)
-
-
-        # TODO Get the name of the Store to compare to the name of the Store Presented on the NFT
+        # 
+        #
+        #TODO:  
+        # Get the name of the Store to compare to the name of the Store Presented on the NFT
         storeName = "Store 1"
 
         nftData = {"ownedNfts": []}
@@ -193,7 +231,8 @@ class AlchemyProvider:
                         # Go through every item in our Shopify Cart
                         for item in line_items:
                             for a in product_id_attributes:
-                                if (item.get("product_id") in a.get("value")):
+
+                                if (str(item.get("product_id")) in a.get("value")):
                                     # We can add the NFT to the nftData
                                     matching_line_items.append(item)
                         if matching_line_items:
@@ -201,7 +240,226 @@ class AlchemyProvider:
                             # Add the NFT to the list
                             nftData["ownedNfts"].append(nft)
         return nftData
+    
+    # This method gets the infotmstion of a specific Voucher/NFT
+    async def getNFTVoucher(self, chainID: str, voucherID: str):
+        if networks.get(chainID) is not None:
+            userChain = networks[chainID]
+            baseURL = f"https://{userChain['alchemy_url']}.g.alchemy.com/nft/v2/{self.API_KEY}/getNFTMetadata/"
 
+            fetchURL = f"{baseURL}?contractAddress={self.contractAddress}&tokenId={voucherID}"
+
+            headers = {"accept": "application/json"}
+            # Gets all the NFT of that wallet account
+            response = requests.get(fetchURL, headers=headers)
+
+            if response.status_code != 200:
+                raise ValueError("Could not fetch NFT metadata")
+            return response.json()
+        else:
+            # Return HTTP status code error
+            return None
+
+    async def submitVoucher(self, chainID: str, voucherID: str, invoiceID: str, paymentID: str) -> Dict[str, Any]:
+        #Get the NFT voucher
+        nft = await self.getNFTVoucher(chainID, voucherID)
+        item = await utils.database.get_object(models.Invoice, invoiceID)
+        
+        # Get the value of the "Discount Type" attribute
+        discount_type = None
+        discount_type = await DiscountTypes.get_discount_type(nft)
+
+        if not discount_type:
+            return discount_type
+    
+        # Switch case based on discount type
+        if discount_type == DiscountTypes.FIXED:
+            nftDiscountPrice = await self.applyFixedDiscount(nft, item, paymentID)
+            return nftDiscountPrice
+        elif discount_type == DiscountTypes.ABSOLUTE:
+            # Do something else
+            nftDiscountPrice = await self.applyAbsoluteDiscount(nft, item, paymentID)
+            if nftDiscountPrice:
+                return nftDiscountPrice
+            return 0
+        elif discount_type == DiscountTypes.PRODUCT_BASED:
+            # Do something completely different
+            nftDiscountPrice = await self.applyProductBasedDiscount(nft, item, paymentID)
+            return nftDiscountPrice
+        else:
+            # Discount type is unknown
+            pass
+            return
+    
+    async def applyFixedDiscount(self, nft, item, paymentID):
+        try:
+            # Get the traity type Discount Value that has the value of the Voucher (ex: 5€)
+            discount_value = next((attribute['value'] for attribute in nft['metadata']['attributes'] if attribute['trait_type'] == 'Discount Value'), None)
+
+            value_regex = r"[-+]?\d*[.,]?\d+|\d+"   # matches any number with optional decimal places
+            symbol_regex = r"[^\d.,]+"  # matches any non-digit or comma/period character
+
+            currency_value = re.search(value_regex, discount_value).group(0)
+            currency_symbol = re.search(symbol_regex, discount_value).group(0)
+            currencyName = currency_table.getVoucherCurrency(currency_symbol)
+            
+            # ⚠️ Test purposes
+            # currencyName = "USD"
+
+            # Check if the voucher is in the same currency of the invoice (item)
+            updatedVoucherValue = None
+            if not item.currency == currencyName:
+                # Convert the value of the NFT to the same currency as the invoice
+                updatedVoucherValue = await currency_table.getCurrencyExchangeValue(item.currency, currencyName, float(currency_value))
+                print(f"{str(currency_value)} {currencyName} is equivalent to {updatedVoucherValue} {item.currency} in our invoice currency.")
+            else: 
+                updatedVoucherValue = currency_value
+                print(f"Voucher has a value of {updatedVoucherValue} {item.currency}")
+
+            #This method will return the value to be sent in the invoice in the currency MATIC (which is the one from the smart-contracts)
+            found_payment = None
+            for payment in item.payments:
+                if payment["id"] == paymentID:
+                    found_payment = payment
+                    break
+            if found_payment is None:
+                raise HTTPException(404, "No such payment method found")
+            
+            rate = Decimal(found_payment['rate'])
+            divisibility = Decimal(found_payment['divisibility'])
+
+            # Returns the price in the chosen NFT token in this case in MATIC
+            price = currency_table.normalize(found_payment['currency'], Decimal(updatedVoucherValue) / rate, divisibility=divisibility)
+
+            return price
+        except (KeyError, StopIteration) as e:
+            # Handle any errors that might occur
+            print("Error: could not find Discount Value trait in JSON data")
+            return
+    
+    async def applyAbsoluteDiscount(self, nft, item, paymentID):
+        try:
+            discount_value = next((attribute['value'] for attribute in nft['metadata']['attributes'] if attribute['trait_type'] == 'Discount Value'), None)
+            if discount_value:
+                match = re.search(r'\d+(\.\d+)?', discount_value).group(0)
+                # This is the percentage of the discount
+                percentageNumber = Decimal(match)
+                invoiceAmount = Decimal(item.price)
+                discountAmount = percentageNumber * invoiceAmount / Decimal('100')
+
+                # Get the currency on selected (MATIC, ETH) and it's rate
+                found_payment = None
+                for payment in item.payments:
+                    if payment["id"] == paymentID:
+                        found_payment = payment
+                        break
+                if found_payment is None:
+                    raise HTTPException(404, "No such payment method found")
+                
+                rate = Decimal(found_payment['rate'])
+                divisibility = Decimal(found_payment['divisibility'])
+
+
+                # Get the invoice amount and compute the discount in the currency of the invoice
+                price = currency_table.normalize(found_payment['currency'], Decimal(discountAmount) / rate, divisibility=divisibility)
+                # Calculate the discount of the invoice amount in the cryptocurrency selected
+
+                # Return it's value
+                return price
+            return 
+        except (KeyError, StopIteration) as e:
+            # Handle any errors that might occur
+            print("Error: could not find Discount Value trait in JSON data")
+            return
+    
+    async def applyProductBasedDiscount(self, nft, item, paymentID):
+        try:
+            discountValue = next((attribute['value'] for attribute in nft['metadata']['attributes'] if attribute['trait_type'] == 'Discount Value'), None)
+
+            productListIDVoucher = next((attribute['value'] for attribute in nft['metadata']['attributes'] if attribute['trait_type'] == 'Product ID'), None)
+
+            store = await utils.database.get_object(models.Store, item.store_id)
+            orderID = item.order_id
+            if not orderID.startswith(shopify_ext.SHOPIFY_ORDER_PREFIX):
+                # The order is not from Shopify
+                # Do the things if the order is not from Shopify
+                return
+            orderID = orderID[len(shopify_ext.SHOPIFY_ORDER_PREFIX) :]
+
+            store = await utils.database.get_object(models.Store, item.store_id, raise_exception=False)
+            if not store:
+                return
+            client = shopify_ext.get_shopify_client(store)
+            if not await client.order_exists(orderID):
+                # Checks for the order with Shopify API
+                return
+            # Get the items from the checkout in shopify
+            order = await client.get_full_order(orderID)
+            orderItemCheckout = order.get("line_items", {})
+
+            # Loop through the item cart
+            discountValuePrice = 0
+            for checkoutItem in orderItemCheckout:
+                if str(checkoutItem.get("product_id")) in productListIDVoucher:
+                    # Means that the in item from the checkout can be applied a discount with the value discount_value
+                    if discountValue == ProductBasedDiscountValue.FREE:
+                        # The product is free, so the discount is the value of the product
+                        discountValuePrice += Decimal(checkoutItem.get("price")) * checkoutItem.get("fulfillable_quantity")
+
+                    elif ProductBasedDiscountValue.PERCENTUAL in discountValue:
+                        match = re.search(r'\d+(\.\d+)?', discountValue).group(0)
+                        # This is the percentage of the discount
+                        percentageNumber = Decimal(match)
+                        itemAmount = Decimal("6.00")
+                        discountValuePrice += percentageNumber * itemAmount / Decimal('100')
+
+
+                    elif any(c in discountValue for c in ProductBasedDiscountValue.CURRENCY):
+                        # The discount has a monetary value like 4€ or 4£ discount in that item
+                        value_regex = r"[-+]?\d*[.,]?\d+|\d+"   # matches any number with optional decimal places
+                        symbol_regex = r"[^\d.,]+"  # matches any non-digit or comma/period character
+                        currency_value = re.search(value_regex, discountValue).group(0)
+                        currency_symbol = re.search(symbol_regex, discountValue).group(0)
+                        currencyName = currency_table.getVoucherCurrency(currency_symbol)
+                        
+                        # ⚠️ Test purposes
+                        # currencyName = "USD"
+
+                        # Check if the voucher is in the same currency of the invoice (item)
+                        updatedVoucherValue = None
+                        if not item.currency == currencyName:
+                            # Convert the value of the NFT to the same currency as the invoice
+                            updatedVoucherValue = await currency_table.getCurrencyExchangeValue(item.currency, currencyName, float(currency_value))
+                            discountValuePrice += Decimal(updatedVoucherValue)
+                            # print(f"{str(currency_value)} {currencyName} is equivalent to {updatedVoucherValue} {item.currency} in our invoice currency.")
+
+                        else: 
+                            updatedVoucherValue = currency_value
+                            discountValuePrice += Decimal(updatedVoucherValue)
+                            # print(f"Voucher has a value of {updatedVoucherValue} {item.currency}")
+                    else:
+                        # The voucher discount is not supported
+                        return None
+
+            found_payment = None
+            for payment in item.payments:
+                if payment["id"] == paymentID:
+                    found_payment = payment
+                    break
+            if found_payment is None:
+                raise HTTPException(404, "No such payment method found")
+            
+            rate = Decimal(found_payment['rate'])
+            divisibility = Decimal(found_payment['divisibility'])
+
+            # Returns the price in the chosen NFT token in this case in MATIC
+            price = currency_table.normalize(found_payment['currency'], Decimal(discountValuePrice) / rate, divisibility=divisibility)
+            
+        except (KeyError, StopIteration) as e:
+            # Handle any errors that might occur
+            print("Error: could not find Discount Value trait in JSON data")
+            return
+        
     def checkFunction(self, address: str, chainID: str):
         if networks.get(chainID) is not None:
             # Gets the Chain that the user is in

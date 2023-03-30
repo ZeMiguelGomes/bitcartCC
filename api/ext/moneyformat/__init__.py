@@ -1,5 +1,6 @@
 import json
 from decimal import ROUND_HALF_EVEN, Decimal
+import requests
 
 
 def set_v(data, key, default):
@@ -103,6 +104,29 @@ class CurrencyTable:
         if isinstance(value, str):
             value = Decimal(value)
         return self.format_currency(currency, value, fancy=False, divisibility=divisibility)
+    
+    def getVoucherCurrency(self, symbol):
+        for key, value in self.data.items():
+            if value["symbol"] == symbol:
+                return key
+        return
+    
+    async def getCurrencyExchangeValue(self, invoiceSimbol, voucherSymbol, amount):
+        url = f"https://open.er-api.com/v6/latest/{voucherSymbol}"
+        response = requests.get(url)
+        if response.status_code == 200:
+            result = response.json()
+            exchange_rate = Decimal(result['rates'][invoiceSimbol])
+            converted_amount = Decimal(amount) * exchange_rate
+            converted_amount = converted_amount.quantize(Decimal('0.00'))
+
+            return converted_amount
+        else:
+            print(f"Error occurred: {response.status_code}")
+            return
+           
+           
+
 
 
 currency_table = CurrencyTable()

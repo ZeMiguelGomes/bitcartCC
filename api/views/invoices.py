@@ -1,3 +1,4 @@
+from decimal import Decimal
 from typing import Optional
 from urllib.parse import urljoin
 
@@ -8,7 +9,8 @@ from sqlalchemy import select
 from api import crud, db, events, models, pagination, schemes, settings, utils
 from api.ext import export as export_ext
 from api.ext.moneyformat import currency_table
-from api.invoices import InvoiceStatus
+from api.invoices import InvoiceStatus, update_status
+from api import invoices
 from api.plugins import apply_filters, run_hook
 
 router = APIRouter()
@@ -81,11 +83,42 @@ async def update_invoice(
     item = await utils.database.get_object(models.Invoice, model_id)
     kwargs = {}
     for field, value in data:
-        if not getattr(item, field) and value:
-            kwargs[field] = value
+        #if not getattr(item, field) and value:
+        if field == "paymentID":
+            continue
+        kwargs[field] = value
+    print(kwargs)
     if kwargs:
+        if data.tx_hashes:
+            invoiceTxHash = item.tx_hashes
+            invoiceTxHash.append(data.tx_hashes)
+            kwargs['tx_hashes'] = invoiceTxHash
+
         await run_hook("invoice_customer_update", item, kwargs)
         await utils.database.modify_object(item, kwargs)
+       
+
+        if data.sent_amount:
+        # Gets the user
+            user = await utils.database.get_object(models.User, item.user_id)
+
+            data = (
+                    await select([models.Invoice, models.PaymentMethod])
+                    .where(models.PaymentMethod.invoice_id == models.Invoice.id)
+                    .where(models.PaymentMethod.id == data.paymentID)
+                    .where(models.Invoice.id == item.id)
+                    .where(models.Invoice.user_id == user.id)
+                    .order_by(models.PaymentMethod.created)
+                    .gino.load((models.Invoice, models.PaymentMethod))
+                    .first()
+                )
+            invoice, method = data
+            print("======")
+            print(method)
+            print("======")
+            await invoice.load_data()
+
+            await update_status(item, InvoiceStatus.PENDING, method, invoice.tx_hashes, Decimal(item.sent_amount))
     return item
 
 

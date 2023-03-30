@@ -54,3 +54,13 @@ async def get_tokens_abi():
     }
 
     return response
+
+@router.post("/submit/")
+async def submit_voucher(data: schemes.SubmitVoucher):
+    alchemyProvider = AlchemyProvider()
+
+    # This method only returns the valid NFT in the user's wallet
+    nft = await alchemyProvider.submitVoucher(str(data.chainID), data.voucherID, data.invoiceID, data.id)
+    if nft == None:
+        raise HTTPException(422, "Check request parameters")
+    return nft
