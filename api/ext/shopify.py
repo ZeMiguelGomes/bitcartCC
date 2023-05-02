@@ -14,6 +14,9 @@ SHOPIFY_KEYWORDS = ["bitcoin", "btc", "bitcartcc", "bitcart"]
 
 class ShopifyAPIError(BitcartError):
     """Error accessing shopify API"""
+    def __init__(self, message, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class ShopifyClient:
@@ -29,6 +32,16 @@ class ShopifyClient:
         async with ClientSession(headers=self.headers) as session:
             async with session.request(method, final_url, **kwargs) as response:
                 data = await response.text()
+                if response.status >= 400:
+                    error_msg = "Error fetching data from Shopify API"
+                    error_code = response.status
+                    try:
+                        error_data = json.loads(data)
+                        if "errors" in error_data:
+                            error_msg = error_data["errors"]
+                    except json.JSONDecodeError:
+                        pass
+                    raise ShopifyAPIError(error_msg, status_code=error_code)
                 if "invalid api key or access token" in data.lower():
                     raise ShopifyAPIError("Invalid API key or access token")
                 try:
@@ -67,6 +80,24 @@ class ShopifyClient:
 
     async def create_transaction(self, order_id, data):
         return await self.request("POST", f"orders/{order_id}/transactions.json", json=data)
+
+    async def getItemsStore(self):
+            try:
+                response = await self.request("GET", f"products.json")
+                products = []
+                for product in response.get("products", []):
+                    product_data = {
+                        "productID": product.get("id"),
+                        "name": product.get("title"),
+                        "image": product.get("image", {}).get("src") if product.get("image") is not None else None
+
+                    }
+                    products.append(product_data)
+                return products
+            except ShopifyAPIError as e:
+                raise e
+                return {"error": str(e)}
+
 
 
 def get_shopify_client(store):

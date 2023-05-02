@@ -74,6 +74,9 @@ class Settings(BaseSettings):
 
     alchemy_api_key: str = Field(None, env="ALCHEMY_API_KEY")
 
+    pinata_api_key: str = Field(None, env="PINATA_API_KEY")
+    pinata_api_secret: str = Field(None, env="PINATA_API_KEY_SECRET")
+
     class Config:
         env_file = "conf/.env"
 

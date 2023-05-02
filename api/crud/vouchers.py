@@ -1,6 +1,5 @@
 import requests
 from api.logger import get_exception_message, get_logger
-from dotenv import load_dotenv
 from api.settings import Settings
 import json
 from web3 import Web3
@@ -8,12 +7,17 @@ from web3.middleware import geth_poa_middleware
 from fastapi import HTTPException
 from pydantic import BaseModel
 from typing import Any, Dict
-from api import models, utils, settings
+from api import models, utils, schemes
 from api.ext.moneyformat import currency_table
 import re
-from sqlalchemy import select
 from decimal import Decimal
 from api.ext import shopify as shopify_ext
+from api.ext.shopify import ShopifyAPIError
+from PIL import Image, ImageDraw, ImageFont
+import io
+import os
+import uuid
+
 
 
 
@@ -92,9 +96,14 @@ class AlchemyProvider:
     def __init__(self) -> None:
         settings = Settings()
         self.API_KEY = settings.alchemy_api_key
+        self.PINATA_API_KEY = settings.pinata_api_key
+        self.PINATA_API_KEY_SECRET = settings.pinata_api_secret
 
         # This address is the address of the smart-contract that has been deployed on the blockchain
         self.contractAddress = "0xBf48D8Cd41d58191f4D8ae62c34d99f435A74721"
+
+        self.PINATA_BASE_URL = "https://api.pinata.cloud/pinning/pinFileToIPFS"
+        self.PINATA_BASE_IMAGE_URL = 'https://gateway.pinata.cloud/ipfs/QmapHk4wD4qTAESXmMq7HkBEjU8RXZLguGAtpxSnXDnkWC'
 
     def getContract(self):
         return self.contractAddress
@@ -173,7 +182,7 @@ class AlchemyProvider:
                 for attr in nft.get("metadata").get("attributes"):
                     if attr["trait_type"] == "Store":
                         # Checks if the Store Name is the correct one
-                        if storeName in attr["value"]:
+                        if storeName in attr["value"] or True:
                             store_value = attr["value"][0]
                             # print("Store value:", store_value)
                             nftData["ownedNfts"].append(nft)
@@ -185,7 +194,7 @@ class AlchemyProvider:
     This method will only return the NFT Vouchers that the user can use in the checkout,
     based on the items presented on the lineItems object (from Shopify)
     """
-    async def getVouchersCheckoutUser(self, userAddress: str, chainID: str, lineItems : str):
+    async def getVouchersCheckoutUser(self, userAddress: str, chainID: str, lineItems : str, storeID: str):
         # Raw list of the NFT
         nft = await self.getNFTByUser(userAddress, chainID)
         line_items = json.loads(lineItems)
@@ -210,14 +219,18 @@ class AlchemyProvider:
                 # If the discount is either Fixed or Absolute, we can add those vouchers to the list
                 discount_type_attribute = next((a for a in nftAttributes if a['trait_type'] == 'Discount Type'), None)
                 if discount_type_attribute and discount_type_attribute['value'] in ['Fixed', 'Absolute']:
-                    # Add NFT to nftData and move on to next iteration
-                    nftData['ownedNfts'].append(nft)
+                    # Check if the NFT can be used in the store by the name
+                    store_attribute = next((a for a in nftAttributes if a['trait_type'] == 'Store'), None)
+
+                    if store_attribute and storeID in store_attribute['value']:
+                        # Add NFT to nftData and move on to next iteration
+                        nftData['ownedNfts'].append(nft)
                     continue
 
                 # Check if the NFT can be used in the store by the name
                 store_attribute = next((a for a in nftAttributes if a['trait_type'] == 'Store'), None)
 
-                if store_attribute and storeName in store_attribute['value']:
+                if store_attribute and storeID in store_attribute['value']:
                     # Check if any Product ID attributes have a value that matches product_id
                     product_id_attributes = [a for a in nftAttributes if a['trait_type'] == 'Product ID']
 
@@ -376,9 +389,12 @@ class AlchemyProvider:
         try:
             discountValue = next((attribute['value'] for attribute in nft['metadata']['attributes'] if attribute['trait_type'] == 'Discount Value'), None)
 
+            print(discountValue)
+
             productListIDVoucher = next((attribute['value'] for attribute in nft['metadata']['attributes'] if attribute['trait_type'] == 'Product ID'), None)
 
             store = await utils.database.get_object(models.Store, item.store_id)
+
             orderID = item.order_id
             if not orderID.startswith(shopify_ext.SHOPIFY_ORDER_PREFIX):
                 # The order is not from Shopify
@@ -396,21 +412,30 @@ class AlchemyProvider:
             # Get the items from the checkout in shopify
             order = await client.get_full_order(orderID)
             orderItemCheckout = order.get("line_items", {})
-
+            print("1")
             # Loop through the item cart
             discountValuePrice = 0
             for checkoutItem in orderItemCheckout:
+                print("2")
                 if str(checkoutItem.get("product_id")) in productListIDVoucher:
+                    print("3")
                     # Means that the in item from the checkout can be applied a discount with the value discount_value
                     if discountValue == ProductBasedDiscountValue.FREE:
+                        print("4")
                         # The product is free, so the discount is the value of the product
                         discountValuePrice += Decimal(checkoutItem.get("price")) * checkoutItem.get("fulfillable_quantity")
 
                     elif ProductBasedDiscountValue.PERCENTUAL in discountValue:
+                        #Get the price of the item
+                        price_set = checkoutItem.get('price_set', {})
+                        shop_money = price_set.get('shop_money', {})
+                        amount = shop_money.get('amount', '')
+                        currency_code = shop_money.get('currency_code', '')
+
                         match = re.search(r'\d+(\.\d+)?', discountValue).group(0)
                         # This is the percentage of the discount
                         percentageNumber = Decimal(match)
-                        itemAmount = Decimal("6.00")
+                        itemAmount = Decimal(amount)
                         discountValuePrice += percentageNumber * itemAmount / Decimal('100')
 
 
@@ -444,6 +469,7 @@ class AlchemyProvider:
             found_payment = None
             for payment in item.payments:
                 if payment["id"] == paymentID:
+                    print("5")
                     found_payment = payment
                     break
             if found_payment is None:
@@ -454,12 +480,178 @@ class AlchemyProvider:
 
             # Returns the price in the chosen NFT token in this case in MATIC
             price = currency_table.normalize(found_payment['currency'], Decimal(discountValuePrice) / rate, divisibility=divisibility)
+
+            return price
             
         except (KeyError, StopIteration) as e:
             # Handle any errors that might occur
             print("Error: could not find Discount Value trait in JSON data")
             return
         
+    async def createImageVoucher(self, voucher):
+        # Fetch the image from BASE URL
+        response = requests.get(self.PINATA_BASE_IMAGE_URL)
+        img = Image.open(io.BytesIO(response.content))
+
+        font_size = 110
+        if voucher.voucherType == schemes.DiscountTypes.FIXED:
+            currencySymbol = currency_table.get_currency_data(voucher.discountCurrency)["symbol"]
+            text = f"{voucher.discountValue} {currencySymbol}"
+        elif voucher.voucherType == schemes.DiscountTypes.PRODUCT_BASED:
+            text = f"Discount Product \n{voucher.discountValue}"
+            font_size = 90
+        else:
+            text = voucher.discountValue
+
+        font_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../fonts/Poppins/Poppins-Bold.ttf"))
+
+    
+        font_color = (255, 255, 255)
+
+        # Create a PIL ImageDraw object
+        draw = ImageDraw.Draw(img)
+        # Get the font object and calculate the text size
+        font = ImageFont.truetype(font_path, font_size)
+        text_width, text_height = draw.textsize(text, font)
+
+        # Calculate the position of the text in the bottom-center of the image
+        img_width, img_height = img.size
+        text_x = (img_width - text_width) // 2
+        text_y = img_height - text_height - 40 # Change the value to adjust the text position
+
+        draw.text((text_x, text_y), text, font=font, fill=font_color)
+
+        img_bytes = io.BytesIO()
+        img.save(img_bytes, format='PNG')
+        img_bytes = img_bytes.getvalue()
+
+        fileUUID = str(uuid.uuid4())
+        print(fileUUID)
+        filename = f"{voucher.voucherType}-{fileUUID}.png"
+        files = [
+            ('file', (filename, io.BytesIO(img_bytes)))
+        ]
+
+        headers = {
+            "pinata_api_key": self.PINATA_API_KEY,
+            "pinata_secret_api_key": self.PINATA_API_KEY_SECRET,
+        }
+
+        # Send the request
+        response = requests.post(self.PINATA_BASE_URL, headers=headers, files=files)
+
+        # Print the response content
+        response_json = response.json()
+        ipfs_hash = response_json['IpfsHash']
+
+
+        return ipfs_hash
+    
+    async def createJSONVoucher(self, imageCID: str, voucher):
+        print("create Voucher")
+        print(voucher)
+        print(voucher.name)
+
+        imageURL = f"https://gateway.pinata.cloud/ipfs/{imageCID}"
+
+
+        if voucher.voucherType == schemes.DiscountTypes.FIXED:
+            currencySymbol = currency_table.get_currency_data(voucher.discountCurrency)["symbol"]
+            
+            discountValue = f"{voucher.discountValue}{currencySymbol}"        
+
+            attributes = [
+                {"trait_type": "Discount Type", "value": voucher.voucherType},
+                {"trait_type": "Discount Value", "value": discountValue},
+                {"trait_type": "Product", "value": "All Products"},
+                {"trait_type": "Store", "value": voucher.store}
+            ]
+            
+        elif voucher.voucherType == schemes.DiscountTypes.ABSOLUTE:
+            attributes = [
+                {"trait_type": "Discount Type", "value": voucher.voucherType},
+                {"trait_type": "Discount Value", "value": voucher.discountValue},
+                {"trait_type": "Product", "value": ["All"]},
+                {"trait_type": "Store", "value": voucher.store}
+            ]
+        elif voucher.voucherType == schemes.DiscountTypes.PRODUCT_BASED:
+            attributes = [
+                {"trait_type": "Discount Type", "value": voucher.voucherType},
+                {"trait_type": "Discount Value", "value": voucher.discountValue},
+                {"trait_type": "Product", "value": ""},
+                {"trait_type": "Store", "value": voucher.store},
+                {"trait_type": "Product ID", "value": voucher.productsID}
+            ]
+        else:
+            raise ValueError("Invalid discount type")
+
+        data = {
+            "image" : imageURL,
+            "external_url" : voucher.externalUrl,
+            "name": voucher.name,
+            "description": voucher.description,
+            "attributes": attributes
+        }
+
+        json_data = json.dumps(data, indent=4)
+        url = "https://api.pinata.cloud/pinning/pinJSONToIPFS"
+
+        headers = {
+            "Content-Type": "application/json",
+            "pinata_api_key": self.PINATA_API_KEY,
+            "pinata_secret_api_key": self.PINATA_API_KEY_SECRET,
+        }
+        filename = f"{voucher.voucherType}-JSON-{str(uuid.uuid4())}.json"
+        payload = json.dumps({
+            "pinataMetadata": {
+                "name": filename,
+            },
+            "pinataContent": json.loads(json_data)
+        })
+        response = requests.request("POST", url, headers=headers, data=payload)
+        response_json = response.json()
+        ipfs_hash = response_json['IpfsHash']
+        return ipfs_hash
+        
+    async def getStoreProducts(self, store_id):
+        store = await utils.database.get_object(models.Store, store_id, raise_exception=False)
+        if not store:
+            return
+        client = shopify_ext.get_shopify_client(store)
+
+        if not client:
+            # Means that the store is not connected to Shopify
+            return
+        try:
+            storeProducts = await client.getItemsStore()
+
+        except ShopifyAPIError as e:
+            # Handle the Shopify API error here
+            return {"error": str(e), "status_code": e.status_code}
+        
+        # Process the store products here
+        return storeProducts
+
+    def getVoucherCreatedByCID(self, cid: str):
+        url = f"https://gateway.pinata.cloud/ipfs/{cid}"
+        response = requests.get(url)
+        response_json = response.json()
+        return response_json
+    
+    def getStatsVoucher(self, address: str):
+
+        baseURL = f"https://polygon-mumbai.g.alchemy.com/nft/v3/{self.API_KEY}/getNFTsForOwner/"
+
+        fetchURL = f"{baseURL}?owner={address}&contractAddresses[]={self.contractAddress}&withMetadata=false&pageSize=100"
+        headers = {"accept": "application/json"}
+
+        response = requests.get(fetchURL, headers=headers)
+
+        countNFT = response.json().get("totalCount")
+
+        return countNFT
+
+
     def checkFunction(self, address: str, chainID: str):
         if networks.get(chainID) is not None:
             # Gets the Chain that the user is in

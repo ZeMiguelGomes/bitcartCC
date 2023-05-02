@@ -779,3 +779,26 @@ class SubmitVoucher(BaseModel):
         if v < 1 or v > 999999:
             raise ValueError('chainID must be between 1 and 999999')
         return v
+
+class BaseVoucher(BaseModel):
+    name: str
+    description: str
+    externalUrl: str
+    voucherType: str
+    store: List[str]
+
+class FixedVoucher(BaseVoucher):
+    discountValue: str
+    discountCurrency: str
+
+class AbsoluteVoucher(BaseVoucher):
+    discountValue: str
+
+class ProductBasedVoucher(BaseVoucher):
+    discountValue: str
+    productsID: List[str]
+
+class DiscountTypes:
+    FIXED = "Fixed"
+    ABSOLUTE = "Absolute"
+    PRODUCT_BASED = "Product-based"
