@@ -639,6 +639,7 @@ class Invoice(BaseModel):
             f"user_id: {self.user_id}\n"
             f"creation_time: {self.creation_time}\n"
             f"created: {self.created}\n"
+            f"payments: {self.payments}\n"
         )
 
     async def add_related(self):

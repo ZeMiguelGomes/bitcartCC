@@ -103,8 +103,12 @@ async def getNFTCreated(cid: str):
     data = alchemyProvider.getVoucherCreatedByCID(cid)
     return data
 
+
 @router.get("/stats")
-async def getStats(address:str, user: models.User = Security(utils.authorization.auth_dependency, scopes=["full_control"]), ):
+async def getStats(
+    address: str,
+    user: models.User = Security(utils.authorization.auth_dependency, scopes=["full_control"]),
+):
     alchemyProvider = AlchemyProvider()
     data = alchemyProvider.getStatsVoucher(address)
     return data

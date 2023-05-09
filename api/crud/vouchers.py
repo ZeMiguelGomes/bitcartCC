@@ -397,9 +397,82 @@ class AlchemyProvider:
 
             orderID = item.order_id
             if not orderID.startswith(shopify_ext.SHOPIFY_ORDER_PREFIX):
+                if bool(item.metadata):
+                    # Metadata has something inside
+                    line_items = item.metadata.get('lineItems', {})
+
+                    if line_items:
+                        # Loop throught the lineItems
+                        discountValuePrice = 0
+                        for product in line_items:
+                            if(str(product.get("product_id")) in productListIDVoucher):
+                                # Means that the in item from the checkout can be applied a discount with the value discount_value
+                                if discountValue == ProductBasedDiscountValue.FREE:
+                                    # The product is free, so the discount is the value of the product
+                                    discountValuePrice += Decimal(product.get("price"))
+                                elif ProductBasedDiscountValue.PERCENTUAL in discountValue:
+                                    #Get the price of the item
+                                    price = product.get('price', {})
+
+                                    match = re.search(r'\d+(\.\d+)?', discountValue).group(0)
+                                    # This is the percentage of the discount
+
+                                    percentageNumber = Decimal(match)
+                                    itemAmount = Decimal(price).quantize(Decimal('.01'))
+                                    discountValuePrice += percentageNumber * itemAmount / Decimal('100')
+                                
+                                elif any(c in discountValue for c in ProductBasedDiscountValue.CURRENCY):
+                                    # The discount has a monetary value like 4€ or 4£ discount in that item
+                                    value_regex = r"[-+]?\d*[.,]?\d+|\d+"   # matches any number with optional decimal places
+                                    symbol_regex = r"[^\d.,]+"  # matches any non-digit or comma/period character
+                                    currency_value = re.search(value_regex, discountValue).group(0)
+                                    currency_symbol = re.search(symbol_regex, discountValue).group(0)
+                                    currencyName = currency_table.getVoucherCurrency(currency_symbol)
+
+                                    # Check if the voucher is in the same currency of the invoice (item)
+                                    updatedVoucherValue = None
+                                    if not item.currency == currencyName:
+                                        # Convert the value of the NFT to the same currency as the invoice
+                                        updatedVoucherValue = await currency_table.getCurrencyExchangeValue(item.currency, currencyName, float(currency_value))
+                                        discountValuePrice += Decimal(updatedVoucherValue)
+                                        # print(f"{str(currency_value)} {currencyName} is equivalent to {updatedVoucherValue} {item.currency} in our invoice currency.")
+
+                                    else: 
+                                        updatedVoucherValue = currency_value
+                                        discountValuePrice += Decimal(updatedVoucherValue)
+                                        # print(f"Voucher has a value of {updatedVoucherValue} {item.currency}")
+                                else:
+                                    # The voucher discount is not supported
+                                    return None
+
+                        # HERE
+                        found_payment = None
+                        for payment in item.payments:
+                            if payment["id"] == paymentID:
+                                found_payment = payment
+                                break
+                        if found_payment is None:
+                            raise HTTPException(404, "No such payment method found")
+                        
+                        rate = Decimal(found_payment['rate'])
+                        divisibility = Decimal(found_payment['divisibility'])
+
+                        # Returns the price in the chosen NFT token in this case in MATIC
+                        price = currency_table.normalize(found_payment['currency'], Decimal(discountValuePrice) / rate, divisibility=divisibility)
+
+                        return price
+                    else:
+                        return None
+                else:
+                    # item.metadata is empty
+                    return None
                 # The order is not from Shopify
                 # Do the things if the order is not from Shopify
-                return
+                 # TODO: The products in DEMO STORES are stored in metadata properties
+            
+            '''
+            This code below is just for Shopify!
+            '''
             orderID = orderID[len(shopify_ext.SHOPIFY_ORDER_PREFIX) :]
 
             store = await utils.database.get_object(models.Store, item.store_id, raise_exception=False)
