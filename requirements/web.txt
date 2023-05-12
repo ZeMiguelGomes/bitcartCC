@@ -22,3 +22,4 @@ redis
 sqlalchemy<1.4
 uvicorn[standard]
 pillow
+web3
