@@ -2,8 +2,8 @@ import requests
 from api.logger import get_exception_message, get_logger
 from api.settings import Settings
 import json
-from web3 import Web3
-from web3.middleware import geth_poa_middleware
+# from web3 import Web3
+# from web3.middleware import geth_poa_middleware
 from fastapi import HTTPException
 from pydantic import BaseModel
 from typing import Any, Dict
@@ -725,7 +725,7 @@ class AlchemyProvider:
         return countNFT
 
 
-    def checkFunction(self, address: str, chainID: str):
+    '''def checkFunction(self, address: str, chainID: str):
         if networks.get(chainID) is not None:
             # Gets the Chain that the user is in
             userChain = networks[chainID]
@@ -749,3 +749,4 @@ class AlchemyProvider:
         # call the getMetadata function to get the metadata for the token
         metadata = contract.functions.getMetadata(token_id).call({"from": sender_address})
         return metadata
+        '''
