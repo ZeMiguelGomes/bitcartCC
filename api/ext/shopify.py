@@ -27,6 +27,14 @@ class ShopifyClient:
         self.auth_header = b64encode(f"{api_key}:{api_secret}".encode()).decode()
         self.headers = {"Authorization": f"Basic {self.auth_header}"}
 
+    # Check if the store can make a request to Shopify API
+    def has_required_fields(self):
+        required_fields = ["api_url", "api_key", "api_secret", "auth_header", "headers"]
+        for field in required_fields:
+            if not hasattr(self, field) or getattr(self, field) == "":
+                return False
+        return True
+
     async def request(self, method, url, **kwargs):
         final_url = os.path.join(self.api_url, "admin/api/2022-04/" + url)
         async with ClientSession(headers=self.headers) as session:
@@ -102,6 +110,9 @@ class ShopifyClient:
 
 def get_shopify_client(store):
     shopify_settings = store.plugin_settings.shopify
+    print("==\n\n")
+    print(shopify_settings)
+    print("==\n\n")
     return ShopifyClient(shopify_settings.shop_name, shopify_settings.api_key, shopify_settings.api_secret)
 
 

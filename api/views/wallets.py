@@ -168,6 +168,37 @@ async def get_wallet_rate(
         raise HTTPException(422, "Unsupported fiat currency")
     return rate
 
+@router.get("/ethwallet")
+async def get_ethereum_wallets(user: models.User = Security(utils.authorization.auth_dependency, scopes=["wallet_management"])):
+    wallets = await models.Wallet.query.where(models.Wallet.user_id == user.id).gino.all()
+
+    unique_addresses = set()
+
+    for wallet in wallets:
+        coin = await settings.settings.get_coin(
+            wallet.currency, {"xpub": wallet.xpub, "contract": wallet.contract, **wallet.additional_xpub_data}
+            )
+        if coin.is_eth_based:
+            # unique_addresses.add(wallet.xpub)
+            unique_addresses.add(wallet.xpub)
+
+    walletObjects = await models.Wallet.query.where(models.Wallet.xpub.in_(unique_addresses))\
+                    .where(models.Wallet.user_id == user.id).distinct(models.Wallet.xpub).gino.all()
+    
+    wallets_data = [
+    {
+        "id": product.id,
+        "name": product.name,
+        "xpub": product.xpub,
+        "currency": product.currency,
+        "user_id": product.user_id,
+    }
+    for product in walletObjects
+    ]
+
+    return wallets_data
+
+
 
 utils.routing.ModelView.register(
     router,

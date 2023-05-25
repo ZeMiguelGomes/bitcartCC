@@ -17,8 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 import io
 import os
 import uuid
-
-
+from api.logger import get_exception_message, get_logger
 
 
 logger = get_logger(__name__)
@@ -197,7 +196,14 @@ class AlchemyProvider:
     async def getVouchersCheckoutUser(self, userAddress: str, chainID: str, lineItems : str, storeID: str):
         # Raw list of the NFT
         nft = await self.getNFTByUser(userAddress, chainID)
-        line_items = json.loads(lineItems)
+
+        try:
+            line_items = json.loads(lineItems)
+            # Continue com o processamento do objeto JSON aqui
+        except ValueError:
+            # Trate o erro quando a string não puder ser convertida em JSON
+            logger.error("Error parsing lineItems object")
+            return None
         # 
         #
         #TODO:  
@@ -265,44 +271,49 @@ class AlchemyProvider:
             headers = {"accept": "application/json"}
             # Gets all the NFT of that wallet account
             response = requests.get(fetchURL, headers=headers)
-
             if response.status_code != 200:
-                raise ValueError("Could not fetch NFT metadata")
+                # raise ValueError("Could not fetch NFT metadata")
+                response.raise_for_status()
             return response.json()
         else:
             # Return HTTP status code error
             return None
 
     async def submitVoucher(self, chainID: str, voucherID: str, invoiceID: str, paymentID: str) -> Dict[str, Any]:
-        #Get the NFT voucher
-        nft = await self.getNFTVoucher(chainID, voucherID)
-        item = await utils.database.get_object(models.Invoice, invoiceID)
-        
-        # Get the value of the "Discount Type" attribute
-        discount_type = None
-        discount_type = await DiscountTypes.get_discount_type(nft)
+        try:
+            #Get the NFT voucher
+            nft = await self.getNFTVoucher(chainID, voucherID)
+            item = await utils.database.get_object(models.Invoice, invoiceID)
+            
+            # Get the value of the "Discount Type" attribute
+            discount_type = None
+            discount_type = await DiscountTypes.get_discount_type(nft)
 
-        if not discount_type:
-            return discount_type
-    
-        # Switch case based on discount type
-        if discount_type == DiscountTypes.FIXED:
-            nftDiscountPrice = await self.applyFixedDiscount(nft, item, paymentID)
-            return nftDiscountPrice
-        elif discount_type == DiscountTypes.ABSOLUTE:
-            # Do something else
-            nftDiscountPrice = await self.applyAbsoluteDiscount(nft, item, paymentID)
-            if nftDiscountPrice:
+            if not discount_type:
+                return discount_type
+        
+            # Switch case based on discount type
+            if discount_type == DiscountTypes.FIXED:
+                nftDiscountPrice = await self.applyFixedDiscount(nft, item, paymentID)
                 return nftDiscountPrice
-            return 0
-        elif discount_type == DiscountTypes.PRODUCT_BASED:
-            # Do something completely different
-            nftDiscountPrice = await self.applyProductBasedDiscount(nft, item, paymentID)
-            return nftDiscountPrice
-        else:
-            # Discount type is unknown
-            pass
-            return
+            elif discount_type == DiscountTypes.ABSOLUTE:
+                # Do something else
+                nftDiscountPrice = await self.applyAbsoluteDiscount(nft, item, paymentID)
+                if nftDiscountPrice:
+                    return nftDiscountPrice
+                return 0
+            elif discount_type == DiscountTypes.PRODUCT_BASED:
+                # Do something completely different
+                nftDiscountPrice = await self.applyProductBasedDiscount(nft, item, paymentID)
+                return nftDiscountPrice
+            else:
+                # Discount type is unknown
+                pass
+                return
+        except requests.HTTPError as e:
+            # Capturar a exceção HTTP e retorná-la
+            raise HTTPException(status_code=e.response.status_code, detail= e.response.text)
+
     
     async def applyFixedDiscount(self, nft, item, paymentID):
         try:
@@ -621,10 +632,6 @@ class AlchemyProvider:
         return ipfs_hash
     
     async def createJSONVoucher(self, imageCID: str, voucher):
-        print("create Voucher")
-        print(voucher)
-        print(voucher.name)
-
         imageURL = f"https://gateway.pinata.cloud/ipfs/{imageCID}"
 
 
@@ -656,7 +663,7 @@ class AlchemyProvider:
                 {"trait_type": "Product ID", "value": voucher.productsID}
             ]
         else:
-            raise ValueError("Invalid discount type")
+            raise HTTPException(status_code=404, detail="Invalid discount type")
 
         data = {
             "image" : imageURL,
@@ -689,12 +696,11 @@ class AlchemyProvider:
     async def getStoreProducts(self, store_id):
         store = await utils.database.get_object(models.Store, store_id, raise_exception=False)
         if not store:
-            return
+            return {"error": "Store not found", "status_code": 400}
         client = shopify_ext.get_shopify_client(store)
-
-        if not client:
+        if not client or not client.has_required_fields():
             # Means that the store is not connected to Shopify
-            return
+            return {"error": "Store is not connected to Shopify", "status_code": 400}
         try:
             storeProducts = await client.getItemsStore()
 
@@ -707,9 +713,15 @@ class AlchemyProvider:
 
     def getVoucherCreatedByCID(self, cid: str):
         url = f"https://gateway.pinata.cloud/ipfs/{cid}"
-        response = requests.get(url)
-        response_json = response.json()
-        return response_json
+        try:
+            response = requests.get(url)
+            response.raise_for_status()  # Lança uma exceção se a resposta HTTP não for bem-sucedida (código >= 400)
+            response_json = response.json()
+            return response_json
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error fetching voucher information with CID")
+            return
+
     
     def getStatsVoucher(self, address: str):
 
@@ -718,11 +730,37 @@ class AlchemyProvider:
         fetchURL = f"{baseURL}?owner={address}&contractAddresses[]={self.contractAddress}&withMetadata=false&pageSize=100"
         headers = {"accept": "application/json"}
 
-        response = requests.get(fetchURL, headers=headers)
+        try: 
+            response = requests.get(fetchURL, headers=headers)
+            response.raise_for_status()  # Raise an exception for non-successful status codes
+            countNFT = response.json().get("totalCount", 0)
+            return countNFT
+        except requests.exceptions.RequestException as e:
+            print("Request error:", e.response.text)
+            logger.error(f"Error fetching the number of voucher for address {address}:\n{get_exception_message(e)}")
+        except Exception as e:
+            print("Error:", e)
+            logger.error(f"Unknown error occurred:\n{get_exception_message(e)}")
+        return 0
 
-        countNFT = response.json().get("totalCount")
 
-        return countNFT
+    async def getNFTByID(self, tokenId: str):
+        baseURL = f"https://polygon-mumbai.g.alchemy.com/nft/v2/{self.API_KEY}/getNFTMetadata"
+
+        fetchURL = f"{baseURL}?contractAddress={self.contractAddress}&tokenId={tokenId}"
+
+        headers = {"accept": "application/json"}
+
+        try: 
+            response = requests.get(fetchURL, headers=headers)
+            response.raise_for_status()
+
+        
+        except requests.HTTPError as e:
+            raise HTTPException(status_code=e.response.status_code, detail= e.response.text)
+        
+        nftDetail = response.json()
+        return nftDetail
 
 
     '''def checkFunction(self, address: str, chainID: str):

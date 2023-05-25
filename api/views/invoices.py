@@ -86,6 +86,8 @@ async def update_invoice(
         #if not getattr(item, field) and value:
         if field == "paymentID":
             continue
+        if field == "metadata" and value is None:
+            continue
         kwargs[field] = value
     print(kwargs)
     if kwargs:

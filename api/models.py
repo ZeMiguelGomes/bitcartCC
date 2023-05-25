@@ -252,6 +252,16 @@ class Wallet(BaseModel):
     contract = Column(Text)
     additional_xpub_data = Column(JSON)
 
+    def __str__(self):
+        return (
+            f"Wallet:\n"
+            f"id: {self.id}\n"
+            f"name: {self.name}\n"
+            f"xpub: {self.xpub}\n"
+            f"currency: {self.currency}\n"
+            f"user_id: {self.user_id}\n"
+        )
+
     def prepare_edit(self, kwargs):  # pragma: no cover
         super().prepare_edit(kwargs)
         if "currency" in kwargs and "additional_xpub_data" not in kwargs and self.provider != kwargs["currency"]:

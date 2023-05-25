@@ -457,6 +457,9 @@ class CustomerUpdateData(BaseModel):
     paid_currency: Optional[str] = ""
     tx_hashes: Optional[str] = ""
     paymentID: Optional[str] = ""
+    metadata: Optional[Dict] = None
+
+
 
     @validator("buyer_email", pre=True, always=False)
     def validate_buyer_email(cls, val):
