@@ -115,9 +115,6 @@ async def update_invoice(
                     .first()
                 )
             invoice, method = data
-            print("======")
-            print(method)
-            print("======")
             await invoice.load_data()
 
             await update_status(item, InvoiceStatus.PENDING, method, invoice.tx_hashes, Decimal(item.sent_amount))

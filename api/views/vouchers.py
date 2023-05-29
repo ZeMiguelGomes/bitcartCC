@@ -67,7 +67,7 @@ async def submit_voucher(data: schemes.SubmitVoucher):
 
 
 @router.post("/create")
-async def create_voucher(voucher: Union[schemes.FixedVoucher, schemes.ProductBasedVoucher, schemes.AbsoluteVoucher]):
+async def create_voucher(voucher: Union[schemes.FixedVoucher, schemes.ProductBasedVoucher, schemes.AbsoluteVoucher], user: models.User = Security(utils.authorization.auth_dependency, scopes=["wallet_management"])):
     alchemyProvider = AlchemyProvider()
     # Create the image of the voucher and return the CID
     voucherImageCID = await alchemyProvider.createImageVoucher(voucher)
@@ -81,7 +81,7 @@ async def create_voucher(voucher: Union[schemes.FixedVoucher, schemes.ProductBas
 
 
 @router.get("/shopify-products")
-async def getShopifyProducts(storeIds: str):
+async def getShopifyProducts(storeIds: str, user: models.User = Security(utils.authorization.auth_dependency, scopes=["wallet_management"])):
     alchemyProvider = AlchemyProvider()
     data = await alchemyProvider.getStoreProducts(storeIds)
     if isinstance(data, dict) and "error" in data:
@@ -90,7 +90,7 @@ async def getShopifyProducts(storeIds: str):
 
 
 @router.get("/nft-created")
-async def getNFTCreated(cid: str):
+async def getNFTCreated(cid: str, user: models.User = Security(utils.authorization.auth_dependency, scopes=["wallet_management"])):
     alchemyProvider = AlchemyProvider()
     data = alchemyProvider.getVoucherCreatedByCID(cid)
     if data == None:
@@ -123,7 +123,7 @@ async def getStats(
     return voucherNumber
 
 @router.get("/{tokenId}")
-async def getNFTByID(tokenId: str):
+async def getNFTByID(tokenId: str, user: models.User = Security(utils.authorization.auth_dependency, scopes=["wallet_management"])):
     alchemyProvider = AlchemyProvider()
     data = await alchemyProvider.getNFTByID(tokenId)
     

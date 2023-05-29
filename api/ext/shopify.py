@@ -110,9 +110,6 @@ class ShopifyClient:
 
 def get_shopify_client(store):
     shopify_settings = store.plugin_settings.shopify
-    print("==\n\n")
-    print(shopify_settings)
-    print("==\n\n")
     return ShopifyClient(shopify_settings.shop_name, shopify_settings.api_key, shopify_settings.api_secret)
 
 
