@@ -89,12 +89,13 @@ async def update_invoice(
         if field == "metadata" and value is None:
             continue
         kwargs[field] = value
-    print(kwargs)
     if kwargs:
         if data.tx_hashes:
             invoiceTxHash = item.tx_hashes
             invoiceTxHash.append(data.tx_hashes)
             kwargs['tx_hashes'] = invoiceTxHash
+        elif item.tx_hashes:
+            kwargs['tx_hashes'] = item.tx_hashes
 
         await run_hook("invoice_customer_update", item, kwargs)
         await utils.database.modify_object(item, kwargs)
@@ -115,9 +116,11 @@ async def update_invoice(
                     .first()
                 )
             invoice, method = data
+
             await invoice.load_data()
 
             await update_status(item, InvoiceStatus.PENDING, method, invoice.tx_hashes, Decimal(item.sent_amount))
+
     return item
 
 

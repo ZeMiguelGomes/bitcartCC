@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Security
+import json
 
 from api import crud, models, schemes, utils
 from api.views.stores.integrations import router as integrations_router
@@ -54,6 +55,27 @@ async def set_store_plugin_settings(
     model = await utils.database.get_object(models.Store, model_id, user)
     await model.set_json_key("plugin_settings", settings)
     return model
+
+@router.patch("/{model_id}/metadata", response_model=schemes.Store)
+async def set_store_metadata_settings(
+    model_id: str,
+    settings: schemes.StoreMetadataSettings,
+    user: models.User = Security(utils.authorization.auth_dependency, scopes=["store_management"]),
+):
+    model = await utils.database.get_object(models.Store, model_id, user)
+
+    # Update the metadata with the new settings
+    metadata = model.metadata or {}
+    metadata.update(settings.dict())
+
+    # Save the updated metadata to the model
+    model.metadata = metadata
+   
+    kwargs = {"metadata": metadata}
+    await model.update(**kwargs).apply()
+
+    return model
+
 
 
 utils.routing.ModelView.register(

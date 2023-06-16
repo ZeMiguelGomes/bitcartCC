@@ -157,6 +157,8 @@ class BaseModel(db.Model, metaclass=BaseModelMeta):
     async def set_json_key(self, key, scheme):
         # Update only passed values, don't modify existing ones
         json_data = jsonable_encoder(getattr(self, key).copy(update=scheme.dict(exclude_unset=True)))
+        print(json_data)
+        print("\n\n\n")
         kwargs = {key: json_data}
         await self.update(**kwargs).apply()
 
@@ -649,7 +651,6 @@ class Invoice(BaseModel):
             f"user_id: {self.user_id}\n"
             f"creation_time: {self.creation_time}\n"
             f"created: {self.created}\n"
-            f"payments: {self.payments}\n"
         )
 
     async def add_related(self):

@@ -18,6 +18,12 @@ import io
 import os
 import uuid
 from api.logger import get_exception_message, get_logger
+from dotenv import load_dotenv
+from pathlib import Path
+import uuid
+
+dotenv_path = Path('conf/.env')
+load_dotenv(dotenv_path=dotenv_path)
 
 
 logger = get_logger(__name__)
@@ -104,6 +110,10 @@ class AlchemyProvider:
         self.PINATA_BASE_URL = "https://api.pinata.cloud/pinning/pinFileToIPFS"
         self.PINATA_BASE_IMAGE_URL = 'https://gateway.pinata.cloud/ipfs/QmapHk4wD4qTAESXmMq7HkBEjU8RXZLguGAtpxSnXDnkWC'
 
+        self.STOCK_CONTRACT_ADDRESS = os.getenv('STOCK_CONTRACT_ADDRESS')
+        self.STOCK_TOKEN_ID = os.getenv('STOCK_TOKEN_ID')
+        self.STOCK_API_URL= os.getenv('STOCK_API_URL')
+
     def getContract(self):
         return self.contractAddress
 
@@ -141,6 +151,71 @@ class AlchemyProvider:
         else:
             # Return HTTP status code error
             return None
+        
+    def getStockNFT(self, voucherID: str, voucherAddress: str):
+        print(f"voucherID: {voucherID}")
+        print(f"voucherAddress: {voucherAddress}")
+        #Get the stock from the userAdress Wallet 
+        STOCK_TOKEN_ID = os.getenv('STOCK_TOKEN_ID')
+        STOCK_API_URL= os.getenv('STOCK_API_URL')
+
+        # Converts the Decimal ID to HEX
+        # stockTokenIdHex = hex(int(STOCK_TOKEN_ID))
+
+        # Converter o valor hexadecimal para um objeto UUID
+        uuid_value = uuid.UUID(hex=voucherID[2:])
+        fetchURL = f"{STOCK_API_URL}/{uuid_value}"
+        response = requests.get(fetchURL)
+
+        responseJson = response.json()
+        stock = {
+            "contract": {
+                "address": voucherAddress
+            },
+            "id": {
+                "tokenId": responseJson.get("id"),
+                "tokenMetadata": {
+                "tokenType": "ERC1155"
+                }
+            },
+            "title": responseJson.get("personal").get("name"),
+            "description": responseJson.get("club").get("name"),
+            "tokenUri": {
+                "gateway": "",
+                "raw": ""
+            },
+            "media": [
+                {
+                "gateway": responseJson.get("club").get("logo"),
+                "raw": responseJson.get("club").get("logo")
+                }
+            ],
+            "metadata": {
+                "metadata": [],
+                "attributes": []
+            },
+        }
+        return stock
+    
+    def getAllStocks(self, userAddress: str):
+        baseUrl = f"https://polygon-mumbai.g.alchemy.com/nft/v2/{self.API_KEY}/getNFTs"
+        fetchUrl = f"{baseUrl}?owner={userAddress}&contractAddresses[]={self.STOCK_CONTRACT_ADDRESS}&withMetadata=false"
+
+        headers = {"accept": "application/json"}
+        # Gets all the NFT of that wallet account
+        response = requests.get(fetchUrl, headers=headers)
+        nftStocks = response.json().get("ownedNfts")
+
+        print("Alchemy Stocks")
+        print(nftStocks)
+        stockList = []
+        for stock in nftStocks:
+            voucherID = stock.get("id").get("tokenId")
+            voucherAddress = stock.get("contract").get("address")
+            voucherStock = self.getStockNFT(voucherID, voucherAddress)
+            stockList.append(voucherStock)
+
+        return stockList
 
     """
     Checks whether a wallet holds a NFT in a given collection by contract address
@@ -193,9 +268,14 @@ class AlchemyProvider:
     This method will only return the NFT Vouchers that the user can use in the checkout,
     based on the items presented on the lineItems object (from Shopify)
     """
-    async def getVouchersCheckoutUser(self, userAddress: str, chainID: str, lineItems : str, storeID: str):
+    async def getVouchersCheckoutUser(self, userAddress: str, chainID: str, lineItems : str, storeID: str, websiteUrl: str):
         # Raw list of the NFT
         nft = await self.getNFTByUser(userAddress, chainID)
+
+        store = await utils.database.get_object(models.Store, storeID)
+        print(store.metadata)
+        print(websiteUrl)
+        print("==\n")
 
         try:
             line_items = json.loads(lineItems)
@@ -211,6 +291,13 @@ class AlchemyProvider:
         storeName = "Store 1"
 
         nftData = {"ownedNfts": []}
+
+        # ⚠️ Alterar o modo de adição do stock à lista de vouchers
+        if store.metadata.get('custom_nft') == True and store.metadata.get('shopify_store_name') == websiteUrl:
+            # Get the custom stock NFT
+            stockNFT = self.getAllStocks(userAddress)
+            if stockNFT:
+                nftData['ownedNfts'].extend(stockNFT)
 
         # Loop through every NFT
         for nft in nft.get("ownedNfts"):
@@ -279,40 +366,71 @@ class AlchemyProvider:
             # Return HTTP status code error
             return None
 
-    async def submitVoucher(self, chainID: str, voucherID: str, invoiceID: str, paymentID: str) -> Dict[str, Any]:
-        try:
-            #Get the NFT voucher
-            nft = await self.getNFTVoucher(chainID, voucherID)
-            item = await utils.database.get_object(models.Invoice, invoiceID)
-            
-            # Get the value of the "Discount Type" attribute
-            discount_type = None
-            discount_type = await DiscountTypes.get_discount_type(nft)
+    async def submitVoucher(self, chainID: str, voucherID: str, invoiceID: str, paymentID: str, voucherContract: str) -> Dict[str, Any]:
 
-            if not discount_type:
-                return discount_type
-        
-            # Switch case based on discount type
-            if discount_type == DiscountTypes.FIXED:
-                nftDiscountPrice = await self.applyFixedDiscount(nft, item, paymentID)
-                return nftDiscountPrice
-            elif discount_type == DiscountTypes.ABSOLUTE:
-                # Do something else
-                nftDiscountPrice = await self.applyAbsoluteDiscount(nft, item, paymentID)
-                if nftDiscountPrice:
+        item = await utils.database.get_object(models.Invoice, invoiceID)
+        print(f"Voucher contract {voucherContract}")
+        print(f"MAin contract {self.contractAddress}")
+        if (voucherContract.lower() == self.contractAddress.lower()): 
+            print("Voucher is from Default Contract")
+            try:
+                #Get the NFT voucher
+                nft = await self.getNFTVoucher(chainID, voucherID)
+                
+                # Get the value of the "Discount Type" attribute
+                discount_type = None
+                discount_type = await DiscountTypes.get_discount_type(nft)
+
+                if not discount_type:
+                    return discount_type
+            
+                # Switch case based on discount type
+                if discount_type == DiscountTypes.FIXED:
+                    nftDiscountPrice = await self.applyFixedDiscount(nft, item, paymentID)
                     return nftDiscountPrice
-                return 0
-            elif discount_type == DiscountTypes.PRODUCT_BASED:
-                # Do something completely different
-                nftDiscountPrice = await self.applyProductBasedDiscount(nft, item, paymentID)
-                return nftDiscountPrice
-            else:
-                # Discount type is unknown
-                pass
-                return
-        except requests.HTTPError as e:
-            # Capturar a exceção HTTP e retorná-la
-            raise HTTPException(status_code=e.response.status_code, detail= e.response.text)
+                elif discount_type == DiscountTypes.ABSOLUTE:
+                    # Do something else
+                    nftDiscountPrice = await self.applyAbsoluteDiscount(nft, item, paymentID)
+                    if nftDiscountPrice:
+                        return nftDiscountPrice
+                    return 0
+                elif discount_type == DiscountTypes.PRODUCT_BASED:
+                    # Do something completely different
+                    nftDiscountPrice = await self.applyProductBasedDiscount(nft, item, paymentID)
+                    return nftDiscountPrice
+                else:
+                    # Discount type is unknown
+                    pass
+                    return
+            except requests.HTTPError as e:
+                # Capturar a exceção HTTP e retorná-la
+                raise HTTPException(status_code=e.response.status_code, detail= e.response.text)
+        else:
+            # If the voucher is from stocks we will apply a automatic 50% discount on the invoice
+            print("Voucher is from Stocks contract")
+
+            DEFAULT_DISCOUNT = 50
+
+            percentageNumber = Decimal(DEFAULT_DISCOUNT)
+            invoiceAmount = Decimal(item.price)
+            discountAmount = percentageNumber * invoiceAmount / Decimal('100')
+
+            # Get the currency on selected (MATIC, ETH) and it's rate
+            found_payment = None
+            for payment in item.payments:
+                if payment["id"] == paymentID:
+                    found_payment = payment
+                    break
+            if found_payment is None:
+                raise HTTPException(404, "No such payment method found")
+            
+            rate = Decimal(found_payment['rate'])
+            divisibility = Decimal(found_payment['divisibility'])
+            
+            price = currency_table.normalize(found_payment['currency'], Decimal(discountAmount) / rate, divisibility=divisibility)
+
+
+            return price
 
     
     async def applyFixedDiscount(self, nft, item, paymentID):
@@ -761,6 +879,11 @@ class AlchemyProvider:
         
         nftDetail = response.json()
         return nftDetail
+    
+    def checkVoucherContract(self, contract: str) -> bool:
+        if contract.lower() == self.STOCK_CONTRACT_ADDRESS.lower():
+            return True
+        return False
 
 
     '''def checkFunction(self, address: str, chainID: str):

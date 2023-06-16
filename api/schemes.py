@@ -241,6 +241,9 @@ class StoreShopifySettings(BaseModel):
 class StorePluginSettings(BaseModel):
     shopify: StoreShopifySettings = StoreShopifySettings()
 
+class StoreMetadataSettings(BaseModel):
+    shopify_store_name: str = ""
+    custom_nft: bool = False
 
 class BaseStore(CreatedMixin):
     name: str
@@ -775,6 +778,7 @@ class SubmitVoucher(BaseModel):
     voucherID: str
     invoiceID: Optional[str] = None
     id: str
+    voucherContract: str
 
 
     @validator('chainID')

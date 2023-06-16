@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, Security
+from fastapi import APIRouter, HTTPException, Query, Security, Request
 from api import crud, utils, models, schemes, settings
 from api.crud.vouchers import AlchemyProvider, TransferRequest
 from typing import Union, List
@@ -33,12 +33,14 @@ async def get_NFT_User(userAddress: str, chainID: int = Query(..., description="
 
 
 @router.get("/nftClient/")
-async def get_NFT_Client_Checkout(userAddress: str, chainID: int, storeID: str, lineItems: str = Query(None)):
+async def get_NFT_Client_Checkout(request: Request, userAddress: str, chainID: int, storeID: str, lineItems: str = Query(None)):
     alchemyProvider = AlchemyProvider()
     # line_items = json.loads(lineItems)
 
+    websiteRequest = request.headers.get("x-website-url")
+
     # This method only returns the NFT that the client can use in the Checkout
-    nft = await alchemyProvider.getVouchersCheckoutUser(userAddress, str(chainID), lineItems, storeID)
+    nft = await alchemyProvider.getVouchersCheckoutUser(userAddress, str(chainID), lineItems, storeID, websiteRequest)
 
     if nft == None:
         raise HTTPException(422, "Check request parameters")
@@ -60,7 +62,7 @@ async def submit_voucher(data: schemes.SubmitVoucher):
     alchemyProvider = AlchemyProvider()
 
     # This method only returns the valid NFT in the user's wallet
-    nft = await alchemyProvider.submitVoucher(str(data.chainID), data.voucherID, data.invoiceID, data.id)
+    nft = await alchemyProvider.submitVoucher(str(data.chainID), data.voucherID, data.invoiceID, data.id, data.voucherContract)
     if nft == None:
         raise HTTPException(422, "Check request parameters")
     return nft
@@ -134,4 +136,10 @@ async def getNFTByID(tokenId: str, user: models.User = Security(utils.authorizat
         error_message = data["error"]
         raise HTTPException(status_code=422, detail=error_message)
 
+    return data
+
+@router.get("/check-stock/{contract}")
+def checkVoucherContract(contract: str):
+    alchemyProvider = AlchemyProvider()
+    data = alchemyProvider.checkVoucherContract(contract)
     return data
